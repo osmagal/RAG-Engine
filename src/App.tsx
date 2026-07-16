@@ -1037,44 +1037,22 @@ export default function App() {
                 </div>
               )}
 
-              {isFirebaseQuotaExceeded && (
-                <div className="mb-4 p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex flex-col gap-2">
-                  <div className="flex gap-1.5 items-start">
-                    <span className="text-sm font-bold">⚠️</span>
-                    <div>
-                      <p className="font-bold text-amber-300">Limite de Cota do Firebase Excedido</p>
-                      <p className="text-[11px] text-amber-400/95 leading-normal mt-1">
-                        Seu projeto Firebase atingiu o limite de cota do plano gratuito (Spark). 
-                        As consultas ao Firestore estão temporariamente suspensas pelo Firebase.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-[11px] bg-black/30 p-2 rounded text-slate-300 border border-white/5 space-y-1">
-                    <p className="font-medium text-amber-300">Como resolver:</p>
-                    <ol className="list-decimal pl-4 space-y-1 text-slate-400">
-                      <li>Acesse o <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline hover:text-indigo-300">Console do Firebase</a></li>
-                      <li>Clique em <b>Fazer upgrade</b> no canto inferior esquerdo</li>
-                      <li>Selecione o plano <b>Blaze (Pay-as-you-go)</b></li>
-                      <li><i>Nota:</i> O plano Blaze mantém o mesmo uso gratuito mensal e só cobra se você ultrapassar limites muito altos!</li>
-                    </ol>
-                  </div>
-                </div>
-              )}
-
-              {firebaseError && !isFirebaseQuotaExceeded && (
-                <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] leading-relaxed">
-                  <span className="font-bold">Erro no Firebase:</span> {firebaseError}
+              {(isFirebaseQuotaExceeded || firebaseError) && (
+                <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] leading-relaxed text-center font-mono">
+                  ⚠️ Não foi possível realizar a consulta no banco de dados.
                 </div>
               )}
 
               <div className="space-y-2.5 max-h-[180px] overflow-y-auto pr-1">
                 {isFirebaseStatusLoading && contacts.length === 0 ? (
-                  <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500">
+                  <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500 font-mono">
                     Carregando base do Firebase...
                   </div>
                 ) : contacts.length === 0 ? (
-                  <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500">
-                    {isFirebaseQuotaExceeded ? "Base temporariamente inacessível (Cota Excedida)" : "Nenhum contato encontrado no Firebase."}
+                  <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500 font-mono">
+                    {isFirebaseQuotaExceeded || firebaseError 
+                      ? "Não foi possível realizar a consulta no banco de dados." 
+                      : "Nenhum contato encontrado no Firebase."}
                   </div>
                 ) : (
                   contacts.map((contact) => (

@@ -4,7 +4,7 @@ import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, query, where, limit } from "firebase/firestore";
+import { getFirestore, collection, getDocs, query, where, limit } from "firebase/firestore/lite";
 
 dotenv.config();
 
@@ -59,13 +59,13 @@ const PORT = 3000;
 
   // Initialize Firebase Client SDK to read the user's base_de_contatos Firestore
   const firebaseConfig = {
-    apiKey: process.env.FB_API_KEY,
+    apiKey: process.env.FB_API_KEY || process.env.VITE_FB_API_KEY,
     authDomain: "base-de-contatos-e834a.firebaseapp.com",
     databaseURL: "https://base-de-contatos-e834a-default-rtdb.firebaseio.com",
     projectId: "base-de-contatos-e834a",
     storageBucket: "base-de-contatos-e834a.firebasestorage.app",
     messagingSenderId: "758600957177",
-    appId: process.env.FB_APP_ID,
+    appId: process.env.FB_APP_ID || process.env.VITE_FB_APP_ID,
     measurementId: "G-MFQMZKBNHB"
   };
 
@@ -659,7 +659,8 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
 
   // Vite integration
   if (process.env.NODE_ENV !== "production") {
-    import("vite").then(({ createServer: createViteServer }) => {
+    const viteModule = "vite";
+    import(viteModule).then(({ createServer: createViteServer }) => {
       createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
