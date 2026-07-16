@@ -10,12 +10,11 @@ import { getFirestore, collection, getDocs } from "firebase/firestore";
 
 dotenv.config();
 
-async function startServer() {
-  const app = express();
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+const app = express();
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  const PORT = 3000;
+const PORT = 3000;
 
   // Initialize GoogleGenAI
   const apiKey = process.env.GEMINI_API_KEY;
@@ -406,22 +405,27 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
 
   // Vite integration
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+    createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
+    }).then((vite) => {
+      app.use(vite.middlewares);
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Server running in dev mode on http://localhost:${PORT}`);
+      });
     });
-    app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+
+    if (!process.env.VERCEL) {
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Server running in production on port ${PORT}`);
+      });
+    }
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer();
+export default app;
