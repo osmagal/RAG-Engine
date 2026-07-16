@@ -236,73 +236,122 @@ export default function App() {
   // Error notifications
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const FALLBACK_CONTACTS: Contact[] = [
-    {
-      id: "112013997",
-      key: "112013997",
-      name: "Loja do Tapeceiro",
-      segmento: "Tapeçaria",
-      phone: "(11) 2013-9997",
-      endereco: "R. Pascoal Dias, 103 - Jardim Santa Adelia, São Paulo - SP, 03971-010"
-    },
-    {
-      id: "1120284151",
-      key: "1120284151",
-      name: "Mecânica Precision Auto",
-      segmento: "Oficina Mecânica",
-      phone: "(11) 98765-4321",
-      endereco: "Av. Principal, 1500 - Centro, São Paulo - SP, 01000-000"
-    },
-    {
-      id: "1120682698",
-      key: "1120682698",
-      name: "EletroVolt Instalações",
-      segmento: "Eletricista",
-      phone: "(11) 2154-8890",
-      endereco: "Rua das Flores, 45 - Vila Mariana, São Paulo - SP, 04123-010"
-    },
-    {
-      id: "1120890430",
-      key: "1120890430",
-      name: "HidroPrime Desentupidora",
-      segmento: "Encanador",
-      phone: "(11) 3344-5566",
-      endereco: "Rua do Oratório, 892 - Mooca, São Paulo - SP, 03116-000"
-    }
-  ];
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const [isFirebaseQuotaExceeded, setIsFirebaseQuotaExceeded] = useState(false);
+  const [isFirebaseStatusLoading, setIsFirebaseStatusLoading] = useState(false);
+
+  // Filters & Pagination states
+  const [filterDdd, setFilterDdd] = useState("");
+  const [filterEstado, setFilterEstado] = useState("");
+  const [filterPais, setFilterPais] = useState("");
+  const [filterSegmento, setFilterSegmento] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalContacts, setTotalContacts] = useState(0);
+
+  // Dynamic filter options retrieved from backend with fallback lists
+  const [allSegmentos, setAllSegmentos] = useState<string[]>(["Tapeçaria", "Oficina Mecânica", "Eletricista", "Encanador"]);
+  const [allDDDs, setAllDDDs] = useState<string[]>(["11", "21", "31", "41", "51", "61", "71", "81"]);
+  const [allEstados, setAllEstados] = useState<string[]>(["SP", "RJ", "MG", "PR", "RS", "DF", "BA", "PE", "CE", "SC"]);
+  const [allPaises, setAllPaises] = useState<string[]>(["Brasil"]);
 
   useEffect(() => {
     fetchDocuments();
-    fetchContacts();
   }, []);
 
+  useEffect(() => {
+    fetchContacts();
+  }, [currentPage, filterDdd, filterEstado, filterPais, filterSegmento]);
+
   const fetchContacts = async () => {
+    setIsFirebaseStatusLoading(true);
     try {
-      const res = await fetch("/api/contacts");
+      const queryParams = new URLSearchParams({
+        ddd: filterDdd,
+        estado: filterEstado,
+        pais: filterPais,
+        segmento: filterSegmento,
+        page: currentPage.toString(),
+        limit: "100"
+      });
+      const res = await fetch(`/api/contacts?${queryParams.toString()}`);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
-      if (!Array.isArray(data)) {
-        throw new Error("Formato inválido recebido do servidor");
+      
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        setContacts(data.contacts || []);
+        setTotalContacts(data.total || 0);
+        setTotalPages(Math.ceil((data.total || 0) / 100) || 1);
+        
+        // Merge retrieved choices with fallbacks to avoid blank select lists
+        if (data.allSegmentos?.length) {
+          setAllSegmentos(prev => Array.from(new Set([...data.allSegmentos, ...prev])));
+        }
+        if (data.allDDDs?.length) {
+          setAllDDDs(prev => Array.from(new Set([...data.allDDDs, ...prev])).sort());
+        }
+        if (data.allEstados?.length) {
+          setAllEstados(prev => Array.from(new Set([...data.allEstados, ...prev])).sort());
+        }
+        if (data.allPaises?.length) {
+          setAllPaises(prev => Array.from(new Set([...data.allPaises, ...prev])));
+        }
+      } else if (Array.isArray(data)) {
+        setContacts(data);
+        setTotalContacts(data.length);
+        setTotalPages(Math.ceil(data.length / 100) || 1);
       }
-      setContacts(data);
+      
       localStorage.setItem("rag_contacts", JSON.stringify(data));
-      addLog(`Loaded ${data.length} company contacts from Server.`);
-    } catch (error) {
-      console.warn("Could not load contacts from server, using local offline database:", error);
+      addLog(`Sincronizado: ${Array.isArray(data) ? data.length : (data.contacts || []).length} contatos carregados da base (Pág. ${currentPage}).`);
+
+      // Fetch Firebase status
+      const statusRes = await fetch("/api/firebase-status");
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        setFirebaseError(statusData.error);
+        setIsFirebaseQuotaExceeded(statusData.isQuotaExceeded);
+      }
+    } catch (error: any) {
+      console.warn("Could not load contacts from server:", error);
       const localStr = localStorage.getItem("rag_contacts");
       if (localStr) {
         try {
           const parsed = JSON.parse(localStr);
-          setContacts(parsed);
-          addLog(`Loaded ${parsed.length} contacts from Local Storage cache (Offline Mode).`);
-          return;
-        } catch (e) {}
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            setContacts(parsed.contacts || []);
+            setTotalContacts(parsed.total || 0);
+            setTotalPages(Math.ceil((parsed.total || 0) / 100) || 1);
+          } else if (Array.isArray(parsed)) {
+            setContacts(parsed);
+            setTotalContacts(parsed.length);
+            setTotalPages(Math.ceil(parsed.length / 100) || 1);
+          }
+          addLog(`Loaded contacts from Local Storage cache.`);
+        } catch (e) {
+          setContacts([]);
+        }
+      } else {
+        setContacts([]);
       }
-      setContacts(FALLBACK_CONTACTS);
-      localStorage.setItem("rag_contacts", JSON.stringify(FALLBACK_CONTACTS));
-      addLog(`Loaded ${FALLBACK_CONTACTS.length} default contacts (Offline Mode).`);
+
+      // Fetch Firebase status on failure too
+      try {
+        const statusRes = await fetch("/api/firebase-status");
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          setFirebaseError(statusData.error || error.message);
+          setIsFirebaseQuotaExceeded(statusData.isQuotaExceeded);
+        } else {
+          setFirebaseError(error.message);
+        }
+      } catch (statusErr) {
+        setFirebaseError(error.message);
+      }
+    } finally {
+      setIsFirebaseStatusLoading(false);
     }
   };
 
@@ -604,7 +653,15 @@ export default function App() {
       const res = await fetch("/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q })
+        body: JSON.stringify({ 
+          question: q,
+          filters: {
+            ddd: filterDdd,
+            estado: filterEstado,
+            pais: filterPais,
+            segmento: filterSegmento
+          }
+        })
       });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -895,17 +952,129 @@ export default function App() {
             <div className="mt-6 pt-6 border-t border-white/5">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isFirebaseQuotaExceeded ? "bg-amber-500" : "bg-emerald-500"} animate-pulse`}></span>
                   Firebase Contacts (RAG)
                 </h2>
                 <span className="text-[9px] font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                  {contacts.length} CADASTROS
+                  {totalContacts > 0 ? `${contacts.length} de ${totalContacts}` : contacts.length} REGISTROS
                 </span>
               </div>
-              <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-1">
-                {contacts.length === 0 ? (
+
+              {/* Filtros de Segmentação para otimização de cota do banco de dados */}
+              <div className="grid grid-cols-2 gap-2 mb-3 bg-black/15 p-2.5 rounded-lg border border-white/5">
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-0.5 font-mono">DDD</label>
+                  <select 
+                    value={filterDdd} 
+                    onChange={(e) => { setFilterDdd(e.target.value); setCurrentPage(1); }}
+                    className="w-full bg-[#0D1117] border border-white/10 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-indigo-500 transition-all font-mono cursor-pointer"
+                  >
+                    <option value="">Todos</option>
+                    {allDDDs.map(ddd => (
+                      <option key={ddd} value={ddd}>{ddd}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-0.5 font-mono">Estado</label>
+                  <select 
+                    value={filterEstado} 
+                    onChange={(e) => { setFilterEstado(e.target.value); setCurrentPage(1); }}
+                    className="w-full bg-[#0D1117] border border-white/10 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-indigo-500 transition-all font-mono cursor-pointer"
+                  >
+                    <option value="">Todos</option>
+                    {allEstados.map(uf => (
+                      <option key={uf} value={uf}>{uf}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-0.5 font-mono">País</label>
+                  <select 
+                    value={filterPais} 
+                    onChange={(e) => { setFilterPais(e.target.value); setCurrentPage(1); }}
+                    className="w-full bg-[#0D1117] border border-white/10 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-indigo-500 transition-all font-mono cursor-pointer"
+                  >
+                    <option value="">Todos</option>
+                    {allPaises.map(pais => (
+                      <option key={pais} value={pais}>{pais}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block mb-0.5 font-mono">Segmento</label>
+                  <select 
+                    value={filterSegmento} 
+                    onChange={(e) => { setFilterSegmento(e.target.value); setCurrentPage(1); }}
+                    className="w-full bg-[#0D1117] border border-white/10 hover:border-white/20 rounded px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-indigo-500 transition-all font-mono cursor-pointer"
+                  >
+                    <option value="">Todos</option>
+                    {allSegmentos.map(seg => (
+                      <option key={seg} value={seg}>{seg}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Limpar Filtros */}
+              {(filterDdd || filterEstado || filterPais || filterSegmento) && (
+                <div className="flex justify-end mb-2.5">
+                  <button 
+                    onClick={() => {
+                      setFilterDdd("");
+                      setFilterEstado("");
+                      setFilterPais("");
+                      setFilterSegmento("");
+                      setCurrentPage(1);
+                    }}
+                    className="text-[9px] font-mono text-indigo-400 hover:text-indigo-300 transition-all flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-white/5 hover:border-white/10"
+                  >
+                    ✕ Limpar Filtros
+                  </button>
+                </div>
+              )}
+
+              {isFirebaseQuotaExceeded && (
+                <div className="mb-4 p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex flex-col gap-2">
+                  <div className="flex gap-1.5 items-start">
+                    <span className="text-sm font-bold">⚠️</span>
+                    <div>
+                      <p className="font-bold text-amber-300">Limite de Cota do Firebase Excedido</p>
+                      <p className="text-[11px] text-amber-400/95 leading-normal mt-1">
+                        Seu projeto Firebase atingiu o limite de cota do plano gratuito (Spark). 
+                        As consultas ao Firestore estão temporariamente suspensas pelo Firebase.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-[11px] bg-black/30 p-2 rounded text-slate-300 border border-white/5 space-y-1">
+                    <p className="font-medium text-amber-300">Como resolver:</p>
+                    <ol className="list-decimal pl-4 space-y-1 text-slate-400">
+                      <li>Acesse o <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline hover:text-indigo-300">Console do Firebase</a></li>
+                      <li>Clique em <b>Fazer upgrade</b> no canto inferior esquerdo</li>
+                      <li>Selecione o plano <b>Blaze (Pay-as-you-go)</b></li>
+                      <li><i>Nota:</i> O plano Blaze mantém o mesmo uso gratuito mensal e só cobra se você ultrapassar limites muito altos!</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
+              {firebaseError && !isFirebaseQuotaExceeded && (
+                <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[11px] leading-relaxed">
+                  <span className="font-bold">Erro no Firebase:</span> {firebaseError}
+                </div>
+              )}
+
+              <div className="space-y-2.5 max-h-[180px] overflow-y-auto pr-1">
+                {isFirebaseStatusLoading && contacts.length === 0 ? (
                   <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500">
                     Carregando base do Firebase...
+                  </div>
+                ) : contacts.length === 0 ? (
+                  <div className="p-4 border border-dashed border-white/5 rounded-lg text-center text-xs text-slate-500">
+                    {isFirebaseQuotaExceeded ? "Base temporariamente inacessível (Cota Excedida)" : "Nenhum contato encontrado no Firebase."}
                   </div>
                 ) : (
                   contacts.map((contact) => (
@@ -931,6 +1100,29 @@ export default function App() {
                   ))
                 )}
               </div>
+
+              {/* Paginação de Contatos */}
+              {totalPages > 1 && (
+                <div className="mt-3.5 pt-3 border-t border-white/5 flex items-center justify-between text-[10px] font-mono">
+                  <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    className="px-2 py-1 bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-white/5 border border-white/10 rounded text-slate-300 transition-all cursor-pointer"
+                  >
+                    ◄ Ant.
+                  </button>
+                  <span className="text-slate-400">
+                    Pág. <b>{currentPage}</b> de <b>{totalPages}</b>
+                  </span>
+                  <button
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    className="px-2 py-1 bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-white/5 border border-white/10 rounded text-slate-300 transition-all cursor-pointer"
+                  >
+                    Próx. ►
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

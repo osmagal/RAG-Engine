@@ -1,11 +1,10 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs } from "firebase/firestore";
+import { getFirestore, collection, getDocs, query, where, limit } from "firebase/firestore";
 
 dotenv.config();
 
@@ -15,16 +14,25 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 const PORT = 3000;
 
-  // Initialize GoogleGenAI
-  const apiKey = process.env.GEMINI_API_KEY;
-  const ai = new GoogleGenAI({
-    apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+  // Lazy initialization of GoogleGenAI to prevent crash if apiKey is missing on startup
+  let aiInstance: GoogleGenAI | null = null;
+  function getAiClient(): GoogleGenAI {
+    if (!aiInstance) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("A variável de ambiente GEMINI_API_KEY é necessária para realizar consultas com Inteligência Artificial.");
       }
+      aiInstance = new GoogleGenAI({
+        apiKey: apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
     }
-  });
+    return aiInstance;
+  }
 
   const isVercel = !!process.env.VERCEL;
   const documentsDir = isVercel
@@ -61,41 +69,6 @@ const PORT = 3000;
     measurementId: "G-MFQMZKBNHB"
   };
 
-  const FALLBACK_CONTACTS = [
-    {
-      id: "112013997",
-      key: "112013997",
-      name: "Loja do Tapeceiro",
-      segmento: "Tapeçaria",
-      phone: "(11) 2013-9997",
-      endereco: "R. Pascoal Dias, 103 - Jardim Santa Adelia, São Paulo - SP, 03971-010"
-    },
-    {
-      id: "1120284151",
-      key: "1120284151",
-      name: "Mecânica Precision Auto",
-      segmento: "Oficina Mecânica",
-      phone: "(11) 98765-4321",
-      endereco: "Av. Principal, 1500 - Centro, São Paulo - SP, 01000-000"
-    },
-    {
-      id: "1120682698",
-      key: "1120682698",
-      name: "EletroVolt Instalações",
-      segmento: "Eletricista",
-      phone: "(11) 2154-8890",
-      endereco: "Rua das Flores, 45 - Vila Mariana, São Paulo - SP, 04123-010"
-    },
-    {
-      id: "1120890430",
-      key: "1120890430",
-      name: "HidroPrime Desentupidora",
-      segmento: "Encanador",
-      phone: "(11) 3344-5566",
-      endereco: "Rua do Oratório, 892 - Mooca, São Paulo - SP, 03116-000"
-    }
-  ];
-
   let firestoreDb: any = null;
   try {
     const firebaseApp = initializeApp(firebaseConfig);
@@ -105,17 +78,172 @@ const PORT = 3000;
     console.error("[Firebase] Erro de inicialização:", err);
   }
 
+  // Helper to extract DDD from phone number
+  function extractDDD(phone: string): string {
+    if (!phone) return "";
+    const match = phone.match(/\((\d{2})\)/);
+    if (match) return match[1];
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length >= 2) return digits.substring(0, 2);
+    return "";
+  }
+
+  // Helper to extract Estado from address
+  function extractEstado(endereco: string): string {
+    if (!endereco) return "";
+    const states = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];
+    for (const state of states) {
+      const regex = new RegExp(`\\b${state}\\b`, "i");
+      if (regex.test(endereco)) {
+        return state;
+      }
+    }
+    return "";
+  }
+
+  // Helper to extract Pais from address
+  function extractPais(endereco: string): string {
+    if (!endereco) return "";
+    if (endereco.toLowerCase().includes("brasil") || endereco.toLowerCase().includes("brazil")) {
+      return "Brasil";
+    }
+    return "Brasil";
+  }
+
+  async function fetchFirebaseContactsWithFilters(filters: {
+    ddd?: string;
+    estado?: string;
+    pais?: string;
+    segmento?: string;
+    page: number;
+    limit: number;
+  }): Promise<{ contacts: any[]; total: number; allSegmentos: string[]; allDDDs: string[]; allEstados: string[]; allPaises: string[] }> {
+    if (!firestoreDb) {
+      return { contacts: [], total: 0, allSegmentos: [], allDDDs: [], allEstados: [], allPaises: [] };
+    }
+
+    try {
+      const contactsCol = collection(firestoreDb, "contacts");
+      let contactsList: any[] = [];
+
+      // Clear error states on success
+      firebaseErrorMessage = null;
+      isFirebaseQuotaExceeded = false;
+
+      let q = query(contactsCol);
+
+      // If a segmento filter is specified, query it at Firestore level to reduce read operations
+      if (filters.segmento) {
+        q = query(q, where("segmento", "==", filters.segmento));
+      }
+
+      // If no filters are specified, retrieve only up to the page requested to avoid reading the whole database
+      const hasFilters = filters.ddd || filters.estado || filters.pais || filters.segmento;
+      if (!hasFilters) {
+        q = query(q, limit(filters.page * filters.limit));
+      } else {
+        // If there are other filters, limit the search scope to 1000 records to protect the quota
+        q = query(q, limit(1000));
+      }
+
+      const snapshot = await getDocs(q);
+      contactsList = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || "",
+          endereco: data.endereco || "",
+          phone: data.phone || "",
+          segmento: data.segmento || "",
+          key: data.key || ""
+        };
+      });
+
+      // Enrich contacts with extracted fields
+      const enrichedContacts = contactsList.map(c => {
+        const cDdd = extractDDD(c.phone);
+        const cEstado = extractEstado(c.endereco);
+        const cPais = extractPais(c.endereco);
+        return {
+          ...c,
+          ddd: cDdd,
+          estado: cEstado,
+          pais: cPais
+        };
+      });
+
+      // Filter in-memory
+      let filtered = enrichedContacts;
+      if (filters.ddd) {
+        filtered = filtered.filter(c => c.ddd === filters.ddd);
+      }
+      if (filters.estado) {
+        filtered = filtered.filter(c => c.estado?.toUpperCase() === filters.estado?.toUpperCase());
+      }
+      if (filters.pais) {
+        filtered = filtered.filter(c => c.pais?.toLowerCase() === filters.pais?.toLowerCase());
+      }
+
+      const total = filtered.length;
+      const startIndex = (filters.page - 1) * filters.limit;
+      const paginatedContacts = filtered.slice(startIndex, startIndex + filters.limit);
+
+      // Dynamic unique options for dropdown filters
+      const allSegmentos = Array.from(new Set(enrichedContacts.map(c => c.segmento).filter(Boolean)));
+      const allDDDs = Array.from(new Set(enrichedContacts.map(c => c.ddd).filter(Boolean)));
+      const allEstados = Array.from(new Set(enrichedContacts.map(c => c.estado).filter(Boolean)));
+      const allPaises = Array.from(new Set(enrichedContacts.map(c => c.pais).filter(Boolean)));
+
+      return {
+        contacts: paginatedContacts,
+        total,
+        allSegmentos,
+        allDDDs,
+        allEstados,
+        allPaises
+      };
+    } catch (error: any) {
+      console.error("[Firebase] Erro ao buscar contatos com filtros:", error);
+      const msg = error?.message || String(error);
+      const code = error?.code || "";
+      firebaseErrorMessage = msg;
+      
+      if (
+        code.includes("resource-exhausted") || 
+        code.includes("quota") ||
+        msg.toLowerCase().includes("quota") ||
+        msg.toLowerCase().includes("limit") ||
+        msg.toLowerCase().includes("exhausted") ||
+        msg.toLowerCase().includes("billing") ||
+        msg.toLowerCase().includes("payment") ||
+        msg.toLowerCase().includes("exceeded") ||
+        msg.toLowerCase().includes("over_quota")
+      ) {
+        isFirebaseQuotaExceeded = true;
+      }
+      return { contacts: [], total: 0, allSegmentos: [], allDDDs: [], allEstados: [], allPaises: [] };
+    }
+  }
+
   let cachedContacts: any[] | null = null;
   let lastFetchTime = 0;
   const CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache
 
+  let firebaseErrorMessage: string | null = null;
+  let isFirebaseQuotaExceeded = false;
+
   async function fetchAndCacheContacts(): Promise<any[]> {
-    if (!firestoreDb) return FALLBACK_CONTACTS;
+    if (!firestoreDb) return [];
     try {
       const contactsCol = collection(firestoreDb, "contacts");
       const snapshot = await getDocs(contactsCol);
+      
+      // Clear error states on success
+      firebaseErrorMessage = null;
+      isFirebaseQuotaExceeded = false;
+
       if (snapshot.empty) {
-        return FALLBACK_CONTACTS;
+        return [];
       }
       const contactsList = snapshot.docs.map(doc => {
         const data = doc.data();
@@ -133,9 +261,26 @@ const PORT = 3000;
       lastFetchTime = Date.now();
       console.log(`[Firebase] Cache atualizado com sucesso. ${contactsList.length} contatos carregados.`);
       return contactsList;
-    } catch (error) {
-      console.error("[Firebase] Erro na consulta do Firestore, usando fallback offline:", error);
-      return FALLBACK_CONTACTS;
+    } catch (error: any) {
+      console.error("[Firebase] Erro na consulta do Firestore:", error);
+      const msg = error?.message || String(error);
+      const code = error?.code || "";
+      firebaseErrorMessage = msg;
+      
+      if (
+        code.includes("resource-exhausted") || 
+        code.includes("quota") ||
+        msg.toLowerCase().includes("quota") ||
+        msg.toLowerCase().includes("limit") ||
+        msg.toLowerCase().includes("exhausted") ||
+        msg.toLowerCase().includes("billing") ||
+        msg.toLowerCase().includes("payment") ||
+        msg.toLowerCase().includes("exceeded") ||
+        msg.toLowerCase().includes("over_quota")
+      ) {
+        isFirebaseQuotaExceeded = true;
+      }
+      return [];
     }
   }
 
@@ -145,13 +290,13 @@ const PORT = 3000;
       const timeoutId = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          console.warn("[Firebase] Timeout (1500ms) ao conectar ao banco de dados em produção. Retornando dados offline.");
-          // Populate cache with fallbacks to avoid repeating timeouts immediately
+          console.warn("[Firebase] Timeout (1500ms) ao conectar ao banco de dados em produção.");
+          // Populate cache with empty list to avoid repeating timeouts immediately
           if (!cachedContacts) {
-            cachedContacts = FALLBACK_CONTACTS;
+            cachedContacts = [];
             lastFetchTime = Date.now();
           }
-          resolve(FALLBACK_CONTACTS);
+          resolve([]);
         }
       }, 1500);
 
@@ -166,12 +311,12 @@ const PORT = 3000;
         if (!resolved) {
           resolved = true;
           clearTimeout(timeoutId);
-          console.error("[Firebase] Erro ao buscar contatos, retornando dados offline:", error);
+          console.error("[Firebase] Erro ao buscar contatos:", error);
           if (!cachedContacts) {
-            cachedContacts = FALLBACK_CONTACTS;
+            cachedContacts = [];
             lastFetchTime = Date.now();
           }
-          resolve(FALLBACK_CONTACTS);
+          resolve([]);
         }
       }
     });
@@ -260,7 +405,7 @@ const PORT = 3000;
 
   // API Route to ask questions (RAG)
   app.post("/ask", async (req, res) => {
-    const { question } = req.body;
+    const { question, filters } = req.body;
     if (!question || typeof question !== "string") {
       return res.status(400).json({ error: "A pergunta é obrigatória e deve ser uma string." });
     }
@@ -272,8 +417,16 @@ const PORT = 3000;
         docsContext += `\n--- DOCUMENTO ${i+1}: ${doc.title} ---\n${doc.content}\n`;
       });
 
-      // Get Firebase contacts for RAG context
-      const contacts = await getFirebaseContacts();
+      // Get Firebase contacts for RAG context using active filters or default to first 100
+      const activeFilters = filters || {};
+      const { contacts } = await fetchFirebaseContactsWithFilters({
+        ddd: activeFilters.ddd,
+        estado: activeFilters.estado,
+        pais: activeFilters.pais,
+        segmento: activeFilters.segmento,
+        page: 1,
+        limit: 100
+      });
       let contactsContext = "";
       if (contacts && contacts.length > 0) {
         contactsContext += "\n--- BASE DE CONTATOS DE EMPRESAS (FIREBASE FIRESTORE) ---\n";
@@ -339,7 +492,7 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
       for (const model of MODEL_FALLBACK_LIST) {
         try {
           console.log(`[RAG-API] Tentando obter resposta com o modelo: ${model}...`);
-          response = await ai.models.generateContent({
+          response = await getAiClient().models.generateContent({
             model: model,
             contents: prompt,
             config: {
@@ -376,12 +529,35 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
   // API to list Firebase contacts
   app.get("/api/contacts", async (req, res) => {
     try {
-      const contacts = await getFirebaseContacts();
-      res.json(contacts);
+      const ddd = req.query.ddd as string;
+      const estado = req.query.estado as string;
+      const pais = req.query.pais as string;
+      const segmento = req.query.segmento as string;
+      const page = parseInt(req.query.page as string || "1", 10);
+      const limitVal = parseInt(req.query.limit as string || "100", 10);
+
+      const result = await fetchFirebaseContactsWithFilters({
+        ddd,
+        estado,
+        pais,
+        segmento,
+        page,
+        limit: limitVal
+      });
+      res.json(result);
     } catch (err: any) {
       console.error("Erro no endpoint /api/contacts:", err);
       res.status(500).json({ error: "Erro ao obter contatos.", details: err.message });
     }
+  });
+
+  // API to get Firebase status
+  app.get("/api/firebase-status", (req, res) => {
+    res.json({
+      initialized: !!firestoreDb,
+      error: firebaseErrorMessage,
+      isQuotaExceeded: isFirebaseQuotaExceeded
+    });
   });
 
   // API to save a document
@@ -463,14 +639,18 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
 
   // Vite integration
   if (process.env.NODE_ENV !== "production") {
-    createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    }).then((vite) => {
-      app.use(vite.middlewares);
-      app.listen(PORT, "0.0.0.0", () => {
-        console.log(`Server running in dev mode on http://localhost:${PORT}`);
+    import("vite").then(({ createServer: createViteServer }) => {
+      createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      }).then((vite) => {
+        app.use(vite.middlewares);
+        app.listen(PORT, "0.0.0.0", () => {
+          console.log(`Server running in dev mode on http://localhost:${PORT}`);
+        });
       });
+    }).catch((err) => {
+      console.error("Erro ao inicializar o servidor de desenvolvimento do Vite:", err);
     });
   } else {
     const distPath = path.join(process.cwd(), "dist");
