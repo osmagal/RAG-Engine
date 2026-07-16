@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Background with dark tech slate depth -->
+  <rect width="128" height="128" rx="28" fill="#0F172A"/>
+  
+  <!-- Outer glowing circular track -->
+  <circle cx="64" cy="64" r="44" stroke="#1E293B" stroke-width="4"/>
+  <circle cx="64" cy="64" r="44" stroke="url(#accentGrad)" stroke-width="4" stroke-dasharray="60 120" stroke-linecap="round"/>
+  
+  <!-- Internal grid connection lines representing RAG search space -->
+  <path d="M44 64h40M64 44v40" stroke="#334155" stroke-width="2" stroke-dasharray="4 4"/>
+  
+  <!-- Core hexagon indicating document structuring and data retrieval -->
+  <path d="M64 34 L88 48 V76 L64 90 L40 76 V48 Z" fill="url(#coreGrad)" opacity="0.95"/>
+  
+  <!-- Central Spark representing AI intelligence -->
+  <path d="M64 48 L67.5 57.5 L77 61 L67.5 64.5 L64 74 L60.5 64.5 L51 61 L60.5 57.5 Z" fill="#FFFFFF"/>
+  
+  <defs>
+    <linearGradient id="accentGrad" x1="20" y1="20" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="0.5" stop-color="#818CF8"/>
+      <stop offset="1" stop-color="#EC4899"/>
+    </linearGradient>
+    <linearGradient id="coreGrad" x1="40" y1="34" x2="88" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+</svg>
