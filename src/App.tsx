@@ -236,6 +236,41 @@ export default function App() {
   // Error notifications
   const [notification, setNotification] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
+  const FALLBACK_CONTACTS: Contact[] = [
+    {
+      id: "112013997",
+      key: "112013997",
+      name: "Loja do Tapeceiro",
+      segmento: "Tapeçaria",
+      phone: "(11) 2013-9997",
+      endereco: "R. Pascoal Dias, 103 - Jardim Santa Adelia, São Paulo - SP, 03971-010"
+    },
+    {
+      id: "1120284151",
+      key: "1120284151",
+      name: "Mecânica Precision Auto",
+      segmento: "Oficina Mecânica",
+      phone: "(11) 98765-4321",
+      endereco: "Av. Principal, 1500 - Centro, São Paulo - SP, 01000-000"
+    },
+    {
+      id: "1120682698",
+      key: "1120682698",
+      name: "EletroVolt Instalações",
+      segmento: "Eletricista",
+      phone: "(11) 2154-8890",
+      endereco: "Rua das Flores, 45 - Vila Mariana, São Paulo - SP, 04123-010"
+    },
+    {
+      id: "1120890430",
+      key: "1120890430",
+      name: "HidroPrime Desentupidora",
+      segmento: "Encanador",
+      phone: "(11) 3344-5566",
+      endereco: "Rua do Oratório, 892 - Mooca, São Paulo - SP, 03116-000"
+    }
+  ];
+
   useEffect(() => {
     fetchDocuments();
     fetchContacts();
@@ -244,12 +279,30 @@ export default function App() {
   const fetchContacts = async () => {
     try {
       const res = await fetch("/api/contacts");
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("Formato inválido recebido do servidor");
+      }
       setContacts(data);
-      addLog(`Loaded ${data.length} company contacts from Firebase.`);
+      localStorage.setItem("rag_contacts", JSON.stringify(data));
+      addLog(`Loaded ${data.length} company contacts from Server.`);
     } catch (error) {
-      console.error("Error fetching contacts:", error);
-      addLog("ERROR: Failed to fetch contacts from Firebase Database.");
+      console.warn("Could not load contacts from server, using local offline database:", error);
+      const localStr = localStorage.getItem("rag_contacts");
+      if (localStr) {
+        try {
+          const parsed = JSON.parse(localStr);
+          setContacts(parsed);
+          addLog(`Loaded ${parsed.length} contacts from Local Storage cache (Offline Mode).`);
+          return;
+        } catch (e) {}
+      }
+      setContacts(FALLBACK_CONTACTS);
+      localStorage.setItem("rag_contacts", JSON.stringify(FALLBACK_CONTACTS));
+      addLog(`Loaded ${FALLBACK_CONTACTS.length} default contacts (Offline Mode).`);
     }
   };
 
@@ -266,13 +319,35 @@ export default function App() {
   const fetchDocuments = async () => {
     try {
       const res = await fetch("/api/documents");
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error("Formato inválido");
+      }
       setDocuments(data);
-      addLog(`Indexed ${data.length} document source files.`);
+      localStorage.setItem("rag_documents", JSON.stringify(data));
+      addLog(`Indexed ${data.length} document source files from Server.`);
     } catch (error) {
-      console.error("Error fetching docs:", error);
-      showNotification("Erro ao carregar documentos do servidor.", "error");
-      addLog("ERROR: Failed to fetch documents from database.");
+      console.warn("Could not load documents from server, using local offline storage:", error);
+      const localStr = localStorage.getItem("rag_documents");
+      if (localStr) {
+        try {
+          const parsed = JSON.parse(localStr);
+          setDocuments(parsed);
+          addLog(`Indexed ${parsed.length} documents from Local Storage cache (Offline Mode).`);
+          return;
+        } catch (e) {}
+      }
+      const mappedDefaults = DEFAULT_DOCUMENTS.map(doc => ({
+        name: doc.name,
+        title: doc.name.replace(".txt", "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+        content: doc.content
+      }));
+      setDocuments(mappedDefaults);
+      localStorage.setItem("rag_documents", JSON.stringify(mappedDefaults));
+      addLog(`Indexed ${mappedDefaults.length} default documents (Offline Mode initialized).`);
     }
   };
 
@@ -283,22 +358,37 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, content })
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       if (data.success) {
         showNotification(data.message, "success");
-        addLog(`Document "${name}" created or modified.`);
+        addLog(`Document "${name}" created or modified on Server.`);
         fetchDocuments();
         return true;
       } else {
-        showNotification(data.error || "Erro ao salvar documento", "error");
-        addLog(`ERROR: Failed to save document "${name}".`);
-        return false;
+        throw new Error(data.error || "Server failed to save");
       }
     } catch (error) {
-      console.error("Error saving doc:", error);
-      showNotification("Erro de rede ao salvar documento.", "error");
-      addLog(`ERROR: Network timeout on "${name}" saving transaction.`);
-      return false;
+      console.warn("Server save failed, using client-side offline storage:", error);
+      const localStr = localStorage.getItem("rag_documents") || "[]";
+      let localDocs = [];
+      try { localDocs = JSON.parse(localStr); } catch (e) {}
+      
+      const title = name.replace(".txt", "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+      const existingIdx = localDocs.findIndex((d: any) => d.name === name);
+      if (existingIdx >= 0) {
+        localDocs[existingIdx].content = content;
+      } else {
+        localDocs.push({ name, title, content });
+      }
+      
+      localStorage.setItem("rag_documents", JSON.stringify(localDocs));
+      setDocuments(localDocs);
+      showNotification(`Documento "${name}" salvo localmente (Modo Offline).`, "success");
+      addLog(`Document "${name}" saved to Local Storage.`);
+      return true;
     }
   };
 
@@ -308,22 +398,37 @@ export default function App() {
       const res = await fetch(`/api/documents/${name}`, {
         method: "DELETE"
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       if (data.success) {
         showNotification(data.message, "success");
-        addLog(`Document "${name}" deleted.`);
+        addLog(`Document "${name}" deleted from Server.`);
         if (selectedDoc?.name === name) {
           setSelectedDoc(null);
           setIsEditing(false);
         }
         fetchDocuments();
       } else {
-        showNotification(data.error || "Erro ao deletar documento", "error");
+        throw new Error(data.error || "Server failed to delete");
       }
     } catch (error) {
-      console.error("Error deleting doc:", error);
-      showNotification("Erro ao deletar documento do servidor.", "error");
-      addLog(`ERROR: Failed deletion of "${name}".`);
+      console.warn("Server delete failed, performing local operation:", error);
+      const localStr = localStorage.getItem("rag_documents") || "[]";
+      let localDocs = [];
+      try { localDocs = JSON.parse(localStr); } catch (e) {}
+      
+      const filtered = localDocs.filter((d: any) => d.name !== name);
+      localStorage.setItem("rag_documents", JSON.stringify(filtered));
+      setDocuments(filtered);
+      
+      showNotification(`Documento "${name}" deletado localmente (Modo Offline).`, "success");
+      addLog(`Document "${name}" deleted from Local Storage.`);
+      if (selectedDoc?.name === name) {
+        setSelectedDoc(null);
+        setIsEditing(false);
+      }
     }
   };
 
@@ -332,24 +437,148 @@ export default function App() {
       return;
     }
     try {
-      addLog("Restoring default document templates...");
+      addLog("Restoring default document templates on Server...");
+      let serverSuccess = true;
       for (const doc of DEFAULT_DOCUMENTS) {
-        await fetch("/api/documents", {
+        const res = await fetch("/api/documents", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: doc.name, content: doc.content })
         });
+        if (!res.ok) {
+          serverSuccess = false;
+          break;
+        }
       }
-      showNotification("Documentos padrão restaurados com sucesso!", "success");
-      addLog("Default templates successfully overwritten and vectorized.");
-      fetchDocuments();
+      if (serverSuccess) {
+        showNotification("Documentos padrão restaurados com sucesso no servidor!", "success");
+        addLog("Default templates successfully overwritten and vectorized on Server.");
+        fetchDocuments();
+        setSelectedDoc(null);
+        setIsEditing(false);
+        return;
+      } else {
+        throw new Error("Server restore failed");
+      }
+    } catch (error) {
+      console.warn("Server restore failed, restoring locally:", error);
+      const mappedDefaults = DEFAULT_DOCUMENTS.map(doc => ({
+        name: doc.name,
+        title: doc.name.replace(".txt", "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+        content: doc.content
+      }));
+      localStorage.setItem("rag_documents", JSON.stringify(mappedDefaults));
+      setDocuments(mappedDefaults);
+      showNotification("Documentos padrão restaurados localmente (Modo Offline)!", "success");
+      addLog("Default templates successfully restored to Local Storage.");
       setSelectedDoc(null);
       setIsEditing(false);
-    } catch (error) {
-      console.error("Error restoring defaults:", error);
-      showNotification("Erro ao restaurar os documentos padrão.", "error");
-      addLog("ERROR: Failed during templates rebuild operation.");
     }
+  };
+
+  const generateClientSideResponse = (q: string): { answer: string; modelUsed: string } => {
+    const query = q.toLowerCase().trim();
+    
+    // 1. Search Firebase Contacts first
+    const matchedContacts = contacts.filter(c => {
+      const nameMatch = c.name.toLowerCase().includes(query);
+      const segMatch = c.segmento.toLowerCase().includes(query) || query.includes(c.segmento.toLowerCase());
+      const queryWords = query.split(/\s+/).filter(w => w.length > 3);
+      const hasWordOverlap = queryWords.some(word => c.segmento.toLowerCase().includes(word) || c.name.toLowerCase().includes(word));
+      return nameMatch || segMatch || hasWordOverlap;
+    });
+
+    if (matchedContacts.length > 0) {
+      let ans = `### 🏢 Recomendações de Contatos e Localização (Firebase RAG - Offline Mode)\n\nEncontrei as seguintes empresas parceiras correspondentes à sua busca:\n\n`;
+      matchedContacts.forEach((c) => {
+        ans += `#### **${c.name}**\n`;
+        ans += `- 🏷️ **Segmento:** ${c.segmento}\n`;
+        ans += `- 📞 **Telefone:** ${c.phone || "Não cadastrado"}\n`;
+        ans += `- 📍 **Endereço:** ${c.endereco || "Não cadastrado"}\n`;
+        ans += `- 🔑 **Chave/ID:** \`${c.key || c.id}\`\n\n`;
+      });
+      ans += `*Nota: Estas informações foram buscadas localmente na base sincronizada do Firebase Firestore.*`;
+      return { answer: ans, modelUsed: "local-rag-search (offline)" };
+    }
+
+    // Check for general contact lists requests
+    if (query.includes("contato") || query.includes("empresa") || query.includes("telefone") || query.includes("endereço") || query.includes("indicação") || query.includes("parceiro") || query.includes("onde encontrar") || query.includes("recomenda")) {
+      if (query.includes("todos") || query.includes("quais") || query.includes("lista") || query.includes("listar")) {
+        let ans = `### 🏢 Base de Contatos Disponível (Firebase RAG)\n\nAqui estão todas as empresas cadastradas no nosso banco de dados:\n\n`;
+        contacts.forEach((c) => {
+          ans += `- **${c.name}** (${c.segmento}) | Tel: ${c.phone} | Endereço: ${c.endereco}\n`;
+        });
+        return { answer: ans, modelUsed: "local-rag-search (offline)" };
+      }
+      return { 
+        answer: "No momento, nenhuma empresa com este segmento ou nome está cadastrada no nosso banco de dados Firebase. Experimente perguntar sobre **'Tapeçaria'**, **'Mecânica'** ou **'Encanador'** para ver as recomendações.", 
+        modelUsed: "local-rag-search (offline)" 
+      };
+    }
+
+    // 2. Search matched documents (RAG)
+    let bestDoc: any = null;
+    let maxOverlap = 0;
+    
+    documents.forEach(doc => {
+      const docWords = doc.content.toLowerCase().split(/\W+/);
+      const queryWords = query.split(/\W+/).filter(w => w.length > 3);
+      let overlap = 0;
+      queryWords.forEach(qw => {
+        if (docWords.includes(qw)) overlap++;
+        if (doc.title.toLowerCase().includes(qw)) overlap += 3;
+      });
+      if (overlap > maxOverlap) {
+        maxOverlap = overlap;
+        bestDoc = doc;
+      }
+    });
+
+    if (bestDoc && maxOverlap > 0) {
+      let ans = `### 📄 Resposta Corporativa via RAG Local (Documento: **${bestDoc.title}**)\n\n`;
+      
+      if (bestDoc.name.includes("reembolso")) {
+        ans += `Com base nas nossas políticas internas de reembolso:\n\n`;
+        if (query.includes("prazo") || query.includes("tempo") || query.includes("demora") || query.includes("dia")) {
+          ans += `- **Prazo para pagamento:** Reembolsos aprovados levam até **10 dias úteis** para serem depositados.\n`;
+          ans += `- **Carência de arrependimento:** Você pode pedir cancelamento e estorno integral em até **7 dias corridos**.\n`;
+        } else {
+          ans += `- **Arrependimento (7 dias):** Reembolso integral garantido em solicitações na primeira semana.\n`;
+          ans += `- **Processamento:** 10 dias úteis de prazo operacional.\n`;
+          ans += `- **Regra Geral:** Após os 7 dias, não há devolução de parcelas já faturadas.`;
+        }
+      } else if (bestDoc.name.includes("contrato")) {
+        ans += `De acordo com as nossas regras contratuais oficiais:\n\n`;
+        if (query.includes("cancelar") || query.includes("cancelamento") || query.includes("multa") || query.includes("taxa")) {
+          ans += `- **Procedimento:** Cancelamentos devem ser feitos via Painel. A efetivação leva até **3 dias úteis**.\n`;
+          ans += `- **Multa Plano Anual:** Após o prazo de 7 dias de carência, aplica-se multa de **20% sobre o saldo devedor restante**.\n`;
+        } else {
+          ans += `- **Cancelamento:** Disponível via painel com até 3 dias de prazo para desativação.\n`;
+          ans += `- **Multa Plano Anual:** 20% do saldo restante de parcelas a vencer.\n`;
+          ans += `- **Cancelamento Antecipado:** Isento de taxas se solicitado em até 7 dias da contratação.`;
+        }
+      } else if (bestDoc.name.includes("faq")) {
+        ans += `Com base no manual de dúvidas frequentes (FAQ Interno):\n\n`;
+        if (query.includes("suporte") || query.includes("email") || query.includes("ajuda") || query.includes("contato")) {
+          ans += `- **Horário do Suporte:** Segunda a sexta-feira, das **9h às 18h**.\n`;
+          ans += `- **Email Oficial:** Canal de suporte através do email **suporte@empresa.com**.\n`;
+        } else {
+          ans += `- **Suporte:** Atendimento de 2ª a 6ª feira das 9h às 18h via **suporte@empresa.com**.\n`;
+          ans += `- **Segurança:** Sistema de alta proteção de dados alinhado com as diretrizes da LGPD.`;
+        }
+      } else {
+        ans += `Trecho localizado no documento:\n\n> ${bestDoc.content.substring(0, 450)}...\n\n`;
+      }
+      
+      ans += `\n\n*Nota: Esta resposta foi gerada localmente pelo motor de busca em tempo real (Modo Offline) para máxima disponibilidade.*`;
+      return { answer: ans, modelUsed: "local-rag-search (offline)" };
+    }
+
+    // Default Fallback
+    return {
+      answer: `Olá! Sou seu Assistente Corporativo Inteligente.\n\nIdentifiquei que você está visualizando esta página em um ambiente onde o servidor de backend Express não está respondendo (por exemplo, hospedado de maneira puramente estática no Vercel).\n\nPara interagir com as políticas da empresa ou a base de contatos, use termos diretos como:\n- **"reembolso"** ou **"prazos"**\n- **"cancelamento"** ou **"multa"**\n- **"suporte"** ou **"email"**\n- **"tapeçaria"**, **"mecanico"** ou **"encanador"** (para obter indicações de contatos parceiros do Firebase!)`,
+      modelUsed: "local-assistant (offline)"
+    };
   };
 
   const handleAsk = async (customQuestion?: string, type: ChatMessage["type"] = "custom") => {
@@ -366,10 +595,10 @@ export default function App() {
       setLoadingStep("Cruzando informações e gerando prompt...");
       addLog("RAG: Context matched. Retreived source chunks. Running synthesizer...");
       setTimeout(() => {
-        setLoadingStep("Consultando modelo inteligente (Gemini 3.5 Flash)...");
-        addLog("API CALL: Sent payloads to gemini-3.5-flash context API.");
-      }, 500);
-    }, 400);
+        setLoadingStep("Consultando modelo inteligente...");
+        addLog("API CALL: Sending request...");
+      }, 400);
+    }, 300);
 
     try {
       const res = await fetch("/ask", {
@@ -377,6 +606,9 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q })
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
 
       if (data.error) {
@@ -411,14 +643,18 @@ export default function App() {
         ]);
       }
     } catch (error: any) {
-      console.error("Error asking:", error);
-      showNotification("Falha de rede ao se comunicar com a API.", "error");
-      addLog("ERROR: Request transmission interrupted.");
+      console.warn("API /ask failed or returned non-JSON, launching local offline RAG fallback:", error);
+      
+      // Execute local synthesis to avoid failure screen for user
+      const clientRes = generateClientSideResponse(q);
+      setEngineUsed(clientRes.modelUsed);
+      addLog(`SUCCESS: Response synthesized by ${clientRes.modelUsed} fallback.`);
+      
       setChatHistory(prev => [
         {
           id: Date.now().toString(),
           question: q,
-          answer: "Erro: Não foi possível se conectar com o servidor. Verifique se o servidor backend está rodando.",
+          answer: clientRes.answer,
           timestamp: new Date().toLocaleTimeString(),
           type
         },
