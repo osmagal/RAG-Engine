@@ -4,7 +4,6 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import * as pdf from "pdf-parse";
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs } from "firebase/firestore";
 
@@ -27,7 +26,28 @@ const PORT = 3000;
     }
   });
 
-  const documentsDir = path.join(process.cwd(), "src", "documents");
+  const isVercel = !!process.env.VERCEL;
+  const documentsDir = isVercel
+    ? path.join("/tmp", "documents")
+    : path.join(process.cwd(), "src", "documents");
+
+  const EMBEDDED_DOCUMENTS = [
+    {
+      name: "politica_reembolso.txt",
+      title: "Politica Reembolso",
+      content: "A empresa realiza reembolsos em até 30 dias corridos após a aprovação da solicitação.\nPara solicitar o reembolso, o cliente deve enviar os comprovantes e preencher o formulário oficial.\nSolicitações enviadas após 60 dias da compra não serão aceitas."
+    },
+    {
+      name: "regras_contrato.txt",
+      title: "Regras Contrato",
+      content: "O contrato tem duração mínima de 12 meses.\nO cancelamento antecipado implica multa de 20% sobre o valor restante do contrato.\nO suporte técnico está disponível em horário comercial, de segunda a sexta-feira, das 08h às 18h."
+    },
+    {
+      name: "faq_interno.txt",
+      title: "Faq Interno",
+      content: "Pergunta: Como entro em contato com o suporte?\nResposta: O suporte pode ser acionado por e-mail ou telefone durante o horário comercial.\nPergunta: Posso cancelar meu contrato a qualquer momento?\nResposta: Sim, porém haverá multa conforme regras contratuais.\nPergunta: Qual o prazo de resposta do suporte?\nResposta: O prazo médio de resposta é de até 24 horas úteis."
+    }
+  ];
 
   // Initialize Firebase Client SDK to read the user's base_de_contatos Firestore
   const firebaseConfig = {
@@ -175,40 +195,67 @@ const PORT = 3000;
     return fetchAndCacheContactsWithTimeout();
   }
 
-  // Pre-fetch contacts once server starts up to populate the cache and speed up the very first request
-  getFirebaseContacts().then(contacts => {
-    console.log(`[Firebase] Pré-carregamento inicial concluído. Cache populado com ${contacts.length} contatos.`);
-  }).catch(err => {
-    console.error("[Firebase] Erro no pré-carregamento inicial:", err);
-  });
-
+  // No pre-fetch contacts at module level to prevent serverless function cold-start timeouts
   function getDocuments() {
+    const docs = new Map<string, { name: string; title: string; content: string }>();
+
+    // 1. Load embedded documents by default so they are always available
+    EMBEDDED_DOCUMENTS.forEach(doc => {
+      docs.set(doc.name, { ...doc });
+    });
+
+    // 2. Try to read from local src/documents directory relative to cwd if it exists (for dev/local)
     try {
-      if (!fs.existsSync(documentsDir)) {
-        fs.mkdirSync(documentsDir, { recursive: true });
-      }
-      const files = fs.readdirSync(documentsDir);
-      const docs = files
-        .filter(file => file.endsWith(".txt"))
-        .map((file) => {
-          const filePath = path.join(documentsDir, file);
-          const content = fs.readFileSync(filePath, "utf-8");
-          const title = file
-            .replace(".txt", "")
-            .split("_")
-            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-            .join(" ");
-          return {
-            name: file,
-            title,
-            content
-          };
+      const localSrcDir = path.join(process.cwd(), "src", "documents");
+      if (fs.existsSync(localSrcDir)) {
+        const files = fs.readdirSync(localSrcDir);
+        files.forEach(file => {
+          if (file.endsWith(".txt")) {
+            try {
+              const filePath = path.join(localSrcDir, file);
+              const content = fs.readFileSync(filePath, "utf-8");
+              const title = file
+                .replace(".txt", "")
+                .split("_")
+                .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(" ");
+              docs.set(file, { name: file, title, content });
+            } catch (err) {
+              console.error("[FS-Loader] Erro ao ler documento local:", file, err);
+            }
+          }
         });
-      return docs;
-    } catch (error) {
-      console.error("Error reading documents:", error);
-      return [];
+      }
+    } catch (e) {
+      console.warn("[FS-Loader] Não foi possível ler diretório local src/documents:", e);
     }
+
+    // 3. Try to read from dynamic documentsDir (which can be /tmp/documents on Vercel)
+    try {
+      if (fs.existsSync(documentsDir)) {
+        const files = fs.readdirSync(documentsDir);
+        files.forEach(file => {
+          if (file.endsWith(".txt")) {
+            try {
+              const filePath = path.join(documentsDir, file);
+              const content = fs.readFileSync(filePath, "utf-8");
+              const title = file
+                .replace(".txt", "")
+                .split("_")
+                .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(" ");
+              docs.set(file, { name: file, title, content });
+            } catch (err) {
+              console.error("[FS-Loader] Erro ao ler documento dinâmico:", file, err);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("[FS-Loader] Não foi possível ler diretório dinâmico:", e);
+    }
+
+    return Array.from(docs.values());
   }
 
   // API Route to ask questions (RAG)
@@ -352,7 +399,18 @@ Por favor, responda com base estritamente nos documentos internos e na base de c
       const isPdf = name.toLowerCase().endsWith(".pdf");
 
       if (isPdf && isBase64) {
-        const pdfParser = typeof pdf === "function" ? pdf : (pdf as any).default;
+        let pdfParser: any;
+        try {
+          const pdfModule = (await import("pdf-parse")) as any;
+          const pdfFn = pdfModule.default || pdfModule;
+          pdfParser = typeof pdfFn === "function" ? pdfFn : (pdfFn as any).default;
+        } catch (err: any) {
+          console.error("Falha ao carregar biblioteca pdf-parse dinamicamente:", err);
+          return res.status(500).json({ 
+            error: "A biblioteca de processamento de PDF não pôde ser carregada neste ambiente de produção.", 
+            details: err.message 
+          });
+        }
         const buffer = Buffer.from(content, "base64");
         
         try {
