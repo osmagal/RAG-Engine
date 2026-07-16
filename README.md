@@ -85,6 +85,12 @@ GEMINI_API_KEY=sua_chave_do_gemini_aqui
 # Chaves de Autenticação do Firebase Cliente
 FB_API_KEY=sua_firebase_api_key_aqui
 FB_APP_ID=seu_firebase_app_id_aqui
+FB_AUTH_DOMAIN=seu_firebase_auth_domain_aqui
+FB_DATABASE_URL=seu_firebase_database_url_aqui
+FB_PROJECT_ID=seu_firebase_project_id_aqui
+FB_STORAGE_BUCKET=seu_firebase_storage_bucket_aqui
+FB_MSG_SENDER=seu_firebase_msg_sender_aqui
+FB_MEASUREMENT_ID=seu_firebase_measurement_aqui
 ```
 
 ---

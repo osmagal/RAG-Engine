@@ -59,14 +59,14 @@ const PORT = 3000;
 
   // Initialize Firebase Client SDK to read the user's base_de_contatos Firestore
   const firebaseConfig = {
-    apiKey: process.env.FB_API_KEY || process.env.VITE_FB_API_KEY,
-    authDomain: "base-de-contatos-e834a.firebaseapp.com",
-    databaseURL: "https://base-de-contatos-e834a-default-rtdb.firebaseio.com",
-    projectId: "base-de-contatos-e834a",
-    storageBucket: "base-de-contatos-e834a.firebasestorage.app",
-    messagingSenderId: "758600957177",
-    appId: process.env.FB_APP_ID || process.env.VITE_FB_APP_ID,
-    measurementId: "G-MFQMZKBNHB"
+    apiKey: process.env.FB_API_KEY,
+    authDomain: process.env.FB_AUTH_DOMAIN,
+    databaseURL: process.env.FB_DATABASE_URL,
+    projectId: process.env.FB_PROJECT_ID,
+    storageBucket: process.env.FB_STORAGE_BUCKET,
+    messagingSenderId: process.env.FB_MSG_SENDER,
+    appId: process.env.FB_APP_ID,
+    measurementId: process.env.FB_MEASUREMENT_ID
   };
 
   let firestoreDb: any = null;
