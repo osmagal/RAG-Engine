@@ -123,41 +123,12 @@ const PORT = 3000;
     }
 
     try {
-      const contactsCol = collection(firestoreDb, "contacts");
-      let contactsList: any[] = [];
-
       // Clear error states on success
       firebaseErrorMessage = null;
       isFirebaseQuotaExceeded = false;
 
-      let q = query(contactsCol);
-
-      // If a segmento filter is specified, query it at Firestore level to reduce read operations
-      if (filters.segmento) {
-        q = query(q, where("segmento", "==", filters.segmento));
-      }
-
-      // If no filters are specified, retrieve only up to the page requested to avoid reading the whole database
-      const hasFilters = filters.ddd || filters.estado || filters.pais || filters.segmento;
-      if (!hasFilters) {
-        q = query(q, limit(filters.page * filters.limit));
-      } else {
-        // If there are other filters, limit the search scope to 1000 records to protect the quota
-        q = query(q, limit(1000));
-      }
-
-      const snapshot = await getDocs(q);
-      contactsList = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          name: data.name || "",
-          endereco: data.endereco || "",
-          phone: data.phone || "",
-          segmento: data.segmento || "",
-          key: data.key || ""
-        };
-      });
+      // Use the cached version to protect the daily read quota completely
+      const contactsList = await getFirebaseContacts();
 
       // Enrich contacts with extracted fields
       const enrichedContacts = contactsList.map(c => {
@@ -174,6 +145,9 @@ const PORT = 3000;
 
       // Filter in-memory
       let filtered = enrichedContacts;
+      if (filters.segmento) {
+        filtered = filtered.filter(c => c.segmento?.toLowerCase() === filters.segmento?.toLowerCase());
+      }
       if (filters.ddd) {
         filtered = filtered.filter(c => c.ddd === filters.ddd);
       }
@@ -188,11 +162,11 @@ const PORT = 3000;
       const startIndex = (filters.page - 1) * filters.limit;
       const paginatedContacts = filtered.slice(startIndex, startIndex + filters.limit);
 
-      // Dynamic unique options for dropdown filters
-      const allSegmentos = Array.from(new Set(enrichedContacts.map(c => c.segmento).filter(Boolean)));
-      const allDDDs = Array.from(new Set(enrichedContacts.map(c => c.ddd).filter(Boolean)));
-      const allEstados = Array.from(new Set(enrichedContacts.map(c => c.estado).filter(Boolean)));
-      const allPaises = Array.from(new Set(enrichedContacts.map(c => c.pais).filter(Boolean)));
+      // Dynamic unique options for dropdown filters (always compiled from the full list to stay consistent)
+      const allSegmentos = Array.from(new Set(enrichedContacts.map(c => c.segmento).filter(Boolean))).sort();
+      const allDDDs = Array.from(new Set(enrichedContacts.map(c => c.ddd).filter(Boolean))).sort();
+      const allEstados = Array.from(new Set(enrichedContacts.map(c => c.estado).filter(Boolean))).sort();
+      const allPaises = Array.from(new Set(enrichedContacts.map(c => c.pais).filter(Boolean))).sort();
 
       return {
         contacts: paginatedContacts,
