@@ -1,0 +1,6 @@
+{
+  "name": "Assistente Inteligente RAG",
+  "description": "Mini Assistente Inteligente corporativo utilizando RAG para responder perguntas com base em políticas de reembolso, regras de contrato, FAQ interno e banco de dados de contatos do Firebase para recomendações de serviços.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
