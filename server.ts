@@ -127,8 +127,41 @@ const PORT = 3000;
       firebaseErrorMessage = null;
       isFirebaseQuotaExceeded = false;
 
-      // Use the cached version to protect the daily read quota completely
-      const contactsList = await getFirebaseContacts();
+      const contactsCol = collection(firestoreDb, "contacts");
+      let q = query(contactsCol);
+
+      // If a segmento filter is specified, query it at Firestore level to reduce read operations
+      if (filters.segmento) {
+        q = query(q, where("segmento", "==", filters.segmento));
+      }
+
+      const hasInMemoryFilters = filters.ddd || filters.estado || filters.pais;
+      
+      // Determine the limit for the Firestore query
+      let firestoreLimit = 100;
+      if (hasInMemoryFilters) {
+        // If we have filters that require in-memory parsing (DDD, Estado, Pais),
+        // we fetch a larger chunk of records to filter them in-memory.
+        firestoreLimit = 2000;
+      } else {
+        // If we don't have in-memory filters, we only need to fetch up to the requested page
+        firestoreLimit = filters.page * filters.limit;
+      }
+
+      q = query(q, limit(firestoreLimit));
+
+      const snapshot = await getDocs(q);
+      const contactsList = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          name: data.name || "",
+          endereco: data.endereco || "",
+          phone: data.phone || "",
+          segmento: data.segmento || "",
+          key: data.key || ""
+        };
+      });
 
       // Enrich contacts with extracted fields
       const enrichedContacts = contactsList.map(c => {
@@ -143,11 +176,8 @@ const PORT = 3000;
         };
       });
 
-      // Filter in-memory
+      // Filter in-memory by DDD, Estado, Pais
       let filtered = enrichedContacts;
-      if (filters.segmento) {
-        filtered = filtered.filter(c => c.segmento?.toLowerCase() === filters.segmento?.toLowerCase());
-      }
       if (filters.ddd) {
         filtered = filtered.filter(c => c.ddd === filters.ddd);
       }
@@ -158,11 +188,27 @@ const PORT = 3000;
         filtered = filtered.filter(c => c.pais?.toLowerCase() === filters.pais?.toLowerCase());
       }
 
-      const total = filtered.length;
-      const startIndex = (filters.page - 1) * filters.limit;
-      const paginatedContacts = filtered.slice(startIndex, startIndex + filters.limit);
+      let total = filtered.length;
+      let paginatedContacts = [];
 
-      // Dynamic unique options for dropdown filters (always compiled from the full list to stay consistent)
+      if (hasInMemoryFilters) {
+        // Since we filtered in-memory, we slice the filtered array
+        const startIndex = (filters.page - 1) * filters.limit;
+        paginatedContacts = filtered.slice(startIndex, startIndex + filters.limit);
+      } else {
+        // Since we queried exactly the required amount from Firestore, we take the last 100
+        const startIndex = (filters.page - 1) * filters.limit;
+        paginatedContacts = filtered.slice(startIndex, startIndex + filters.limit);
+        
+        // If we returned exactly the amount queried or more, there might be more pages
+        if (contactsList.length >= firestoreLimit) {
+          total = firestoreLimit + 100; // Let the UI know there is at least one more page
+        } else {
+          total = contactsList.length;
+        }
+      }
+
+      // Compile unique options for dropdown filters
       const allSegmentos = Array.from(new Set(enrichedContacts.map(c => c.segmento).filter(Boolean))).sort();
       const allDDDs = Array.from(new Set(enrichedContacts.map(c => c.ddd).filter(Boolean))).sort();
       const allEstados = Array.from(new Set(enrichedContacts.map(c => c.estado).filter(Boolean))).sort();
