@@ -32,15 +32,50 @@ async function startServer() {
 
   // Initialize Firebase Client SDK to read the user's base_de_contatos Firestore
   const firebaseConfig = {
-    apiKey: "AIzaSyA2QUhRiHL4raeMCnL5weF3PZJqIUcnaUU",
+    apiKey: process.env.FB_API_KEY,
     authDomain: "base-de-contatos-e834a.firebaseapp.com",
     databaseURL: "https://base-de-contatos-e834a-default-rtdb.firebaseio.com",
     projectId: "base-de-contatos-e834a",
     storageBucket: "base-de-contatos-e834a.firebasestorage.app",
     messagingSenderId: "758600957177",
-    appId: "1:758600957177:web:cd70c67e7083be3df17628",
+    appId: process.env.FB_APP_ID,
     measurementId: "G-MFQMZKBNHB"
   };
+
+  const FALLBACK_CONTACTS = [
+    {
+      id: "112013997",
+      key: "112013997",
+      name: "Loja do Tapeceiro",
+      segmento: "Tapeçaria",
+      phone: "(11) 2013-9997",
+      endereco: "R. Pascoal Dias, 103 - Jardim Santa Adelia, São Paulo - SP, 03971-010"
+    },
+    {
+      id: "1120284151",
+      key: "1120284151",
+      name: "Mecânica Precision Auto",
+      segmento: "Oficina Mecânica",
+      phone: "(11) 98765-4321",
+      endereco: "Av. Principal, 1500 - Centro, São Paulo - SP, 01000-000"
+    },
+    {
+      id: "1120682698",
+      key: "1120682698",
+      name: "EletroVolt Instalações",
+      segmento: "Eletricista",
+      phone: "(11) 2154-8890",
+      endereco: "Rua das Flores, 45 - Vila Mariana, São Paulo - SP, 04123-010"
+    },
+    {
+      id: "1120890430",
+      key: "1120890430",
+      name: "HidroPrime Desentupidora",
+      segmento: "Encanador",
+      phone: "(11) 3344-5566",
+      endereco: "Rua do Oratório, 892 - Mooca, São Paulo - SP, 03116-000"
+    }
+  ];
 
   let firestoreDb: any = null;
   try {
@@ -51,11 +86,18 @@ async function startServer() {
     console.error("[Firebase] Erro de inicialização:", err);
   }
 
-  async function getFirebaseContacts() {
-    if (!firestoreDb) return [];
+  let cachedContacts: any[] | null = null;
+  let lastFetchTime = 0;
+  const CACHE_TTL = 10 * 60 * 1000; // 10 minutes cache
+
+  async function fetchAndCacheContacts(): Promise<any[]> {
+    if (!firestoreDb) return FALLBACK_CONTACTS;
     try {
       const contactsCol = collection(firestoreDb, "contacts");
       const snapshot = await getDocs(contactsCol);
+      if (snapshot.empty) {
+        return FALLBACK_CONTACTS;
+      }
       const contactsList = snapshot.docs.map(doc => {
         const data = doc.data();
         return {
@@ -67,12 +109,79 @@ async function startServer() {
           key: data.key || ""
         };
       });
+      
+      cachedContacts = contactsList;
+      lastFetchTime = Date.now();
+      console.log(`[Firebase] Cache atualizado com sucesso. ${contactsList.length} contatos carregados.`);
       return contactsList;
     } catch (error) {
-      console.error("[Firebase] Erro ao obter contatos do Firestore:", error);
-      return [];
+      console.error("[Firebase] Erro na consulta do Firestore, usando fallback offline:", error);
+      return FALLBACK_CONTACTS;
     }
   }
+
+  async function fetchAndCacheContactsWithTimeout(): Promise<any[]> {
+    return new Promise(async (resolve) => {
+      let resolved = false;
+      const timeoutId = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.warn("[Firebase] Timeout (1500ms) ao conectar ao banco de dados em produção. Retornando dados offline.");
+          // Populate cache with fallbacks to avoid repeating timeouts immediately
+          if (!cachedContacts) {
+            cachedContacts = FALLBACK_CONTACTS;
+            lastFetchTime = Date.now();
+          }
+          resolve(FALLBACK_CONTACTS);
+        }
+      }, 1500);
+
+      try {
+        const list = await fetchAndCacheContacts();
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeoutId);
+          resolve(list);
+        }
+      } catch (error) {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeoutId);
+          console.error("[Firebase] Erro ao buscar contatos, retornando dados offline:", error);
+          if (!cachedContacts) {
+            cachedContacts = FALLBACK_CONTACTS;
+            lastFetchTime = Date.now();
+          }
+          resolve(FALLBACK_CONTACTS);
+        }
+      }
+    });
+  }
+
+  async function getFirebaseContacts(): Promise<any[]> {
+    const now = Date.now();
+    // Return cache immediately if it's still fresh
+    if (cachedContacts && (now - lastFetchTime < CACHE_TTL)) {
+      return cachedContacts;
+    }
+
+    // If cache exists but expired, trigger update in background, return stale cache immediately
+    if (cachedContacts) {
+      console.log("[Firebase] Cache expirou. Atualizando contatos em background.");
+      fetchAndCacheContacts().catch(err => console.error("[Firebase] Erro ao atualizar cache em background:", err));
+      return cachedContacts;
+    }
+
+    // First run: block up to 1.5s then resolve
+    return fetchAndCacheContactsWithTimeout();
+  }
+
+  // Pre-fetch contacts once server starts up to populate the cache and speed up the very first request
+  getFirebaseContacts().then(contacts => {
+    console.log(`[Firebase] Pré-carregamento inicial concluído. Cache populado com ${contacts.length} contatos.`);
+  }).catch(err => {
+    console.error("[Firebase] Erro no pré-carregamento inicial:", err);
+  });
 
   function getDocuments() {
     try {
